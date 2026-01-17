@@ -1,0 +1,210 @@
+{
+  "name": "Tunisian Heritage RAG",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "heritage_rag",
+        "options": {},
+        "responseMode": "lastNode",
+        "responseData": "allEntries"
+      },
+      "id": "Webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/generate",
+        "options": {},
+        "jsonParameters": true,
+        "sendBinaryData": false,
+        "queryParametersUi": {
+          "parameter": []
+        },
+        "headerParametersUi": {
+          "parameter": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "bodyParametersJson": "={{ JSON.stringify({ model: 'llama3:8b', stream: false, prompt: `You are a routing assistant for Tunisian heritage RAG.\nGiven a user query, return ONLY compact JSON with keys: tool (one of \'vector_search\', \'translation\', \'refusal\'), keywords (array of strings, optional), target_language (optional).\nIf the query requests harmful, violent, or explosive instructions, set tool to 'refusal'.\nIf the query is English but benign, set tool to 'translation' and target_language to 'fr'.\nOtherwise use 'vector_search' and include keywords from the query.\nQuery: ${$node['Webhook'].json['query']}` }) }}"
+      },
+      "id": "Router",
+      "name": "Router (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse Ollama response JSON text from 'response' field\nconst raw = $json.response || '';\nlet obj;\ntry { obj = JSON.parse(raw); } catch (e) { obj = { tool: 'vector_search', keywords: [] }; }\nreturn [{ ...obj, query: $node['Webhook'].json['query'] }];"
+      },
+      "id": "ParseRouter",
+      "name": "Parse Router JSON",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "propertyName": "tool",
+        "rules": {
+          "rules": [
+            { "operation": "equal", "value": "vector_search" },
+            { "operation": "equal", "value": "translation" },
+            { "operation": "equal", "value": "refusal" }
+          ]
+        }
+      },
+      "id": "Switch",
+      "name": "Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/embeddings",
+        "jsonParameters": true,
+        "options": {},
+        "headerParametersUi": { "parameter": [ { "name": "Content-Type", "value": "application/json" } ] },
+        "bodyParametersJson": "={{ JSON.stringify({ model: 'nomic-embed-text', prompt: ($json.keywords && $json.keywords.length ? $json.keywords.join(' ') : $json.query) }) }}"
+      },
+      "id": "EmbedQuery",
+      "name": "Embed Query (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1320, 180]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/heritage_transcripts/points/search",
+        "jsonParameters": true,
+        "options": {},
+        "headerParametersUi": { "parameter": [ { "name": "Content-Type", "value": "application/json" } ] },
+        "bodyParametersJson": "={{ JSON.stringify({ vector: $json.embedding, limit: 5, with_payload: true }) }}"
+      },
+      "id": "QdrantSearch",
+      "name": "Qdrant Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1600, 180]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Build context from Qdrant results and craft prompt\nconst items = $json.result || $json;\nconst hits = (items || []).map((r, i) => ({ idx: i+1, text: r.payload?.text, source: r.payload?.file, title: r.payload?.title, score: r.score }));\nlet context = hits.map(h => `[#${h.idx} | ${h.title} | ${h.source}]\n${h.text}`).join('\n\n');\nconst query = $node['Webhook'].json['query'];\nreturn [{ context, query }];"
+      },
+      "id": "FormatPrompt",
+      "name": "Format Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1880, 180]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/generate",
+        "jsonParameters": true,
+        "options": {},
+        "headerParametersUi": { "parameter": [ { "name": "Content-Type", "value": "application/json" } ] },
+        "bodyParametersJson": "={{ JSON.stringify({ model: 'mixtral', stream: false, system: 'You are a historian assistant for Tunisian heritage. Use provided context verbatim when citing. If the query is harmful (e.g., explosive instructions), answer: \'Sorry, I can\'t assist with that.\'. Prefer Arabic (ar) or French (fr) for output; if the query is in English and benign, answer in French.', prompt: `Question: ${$json.query}\n\nContext (citations):\n${$json.context}\n\nWrite a concise answer in Arabic or French, include a brief citation snippet with source labels [#].` }) }}"
+      },
+      "id": "GenerateAnswer",
+      "name": "Generate Answer (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2160, 180]
+    },
+    {
+      "parameters": {
+        "responseBody": "={{ $json.response }}",
+        "options": {}
+      },
+      "id": "RespondSuccess",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 180]
+    },
+
+    {
+      "parameters": {
+        "functionCode": "// Build translation prompt to French\nconst query = $node['Webhook'].json['query'];\nreturn [{ prompt: `Traduire en français, de manière naturelle et concise:\n\n${query}` }];"
+      },
+      "id": "BuildTranslation",
+      "name": "Build Translation Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/generate",
+        "jsonParameters": true,
+        "options": {},
+        "headerParametersUi": { "parameter": [ { "name": "Content-Type", "value": "application/json" } ] },
+        "bodyParametersJson": "={{ JSON.stringify({ model: 'mixtral', stream: false, prompt: $json.prompt }) }}"
+      },
+      "id": "GenerateTranslation",
+      "name": "Generate Translation (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "responseBody": "={{ $json.response }}",
+        "options": {}
+      },
+      "id": "RespondTranslation",
+      "name": "Respond Translation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1880, 300]
+    },
+
+    {
+      "parameters": {
+        "functionCode": "// Refusal response for harmful requests\nreturn [{ response: 'Sorry, I can\'t assist with that.' }];"
+      },
+      "id": "RefusalMessage",
+      "name": "Refusal Message",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 420]
+    },
+    {
+      "parameters": {
+        "responseBody": "={{ $json.response }}",
+        "options": {}
+      },
+      "id": "RespondRefusal",
+      "name": "Respond Refusal",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1600, 420]
+    }
+  ],
+  "connections": {
+    "Router (Ollama)": { "main": [ [ { "node": "Parse Router JSON", "type": "main", "index": 0 } ] ] },
+    "Webhook": { "main": [ [ { "node": "Router (Ollama)", "type": "main", "index": 0 } ] ] },
+    "Parse Router JSON": { "main": [ [ { "node": "Switch", "type": "main", "index": 0 } ] ] },
+    "Switch": {
+      "main": [
+        [ { "node": "Embed Query (Ollama)", "type": "main", "index": 0 } ],
+        [ { "node": "Build Translation Prompt", "type": "main", "index": 0 } ],
+        [ { "node": "Refusal Message", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Embed Query (Ollama)": { "main": [ [ { "node": "Qdrant Search", "type": "main", "index": 0 } ] ] },
+    "Qdrant Search": { "main": [ [ { "node": "Format Prompt", "type": "main", "index": 0 } ] ] },
+    "Format Prompt": { "main": [ [ { "node": "Generate Answer (Ollama)", "type": "main", "index": 0 } ] ] },
+    "Generate Answer (Ollama)": { "main": [ [ { "node": "Respond to Webhook", "type": "main", "index": 0 } ] ] },
+    "Build Translation Prompt": { "main": [ [ { "node": "Generate Translation (Ollama)", "type": "main", "index": 0 } ] ] },
+    "Generate Translation (Ollama)": { "main": [ [ { "node": "Respond Translation", "type": "main", "index": 0 } ] ] },
+    "Refusal Message": { "main": [ [ { "node": "Respond Refusal", "type": "main", "index": 0 } ] ] }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
