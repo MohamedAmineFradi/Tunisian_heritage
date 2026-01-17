@@ -1,2 +1,21 @@
-requests
-python-dotenv
+# Tunisian Heritage RAG - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+requests>=2.31.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# HTTP connection pooling and retries (included in requests but explicit for clarity)
+urllib3>=2.0.0,<3.0.0
+
+# Progress bars for better UX
+tqdm>=4.66.0,<5.0.0
+
+# Optional: faster JSON parsing
+# orjson>=3.9.0,<4.0.0
+
+# Development and testing
+# pytest>=7.4.0,<8.0.0
+# black>=23.0.0,<24.0.0
+# flake8>=6.0.0,<7.0.0
+
